@@ -112,6 +112,33 @@ Full transaction details: [REVIEWER_GUIDE.md](REVIEWER_GUIDE.md).
 
 ---
 
-## v2.6 — Full Documentation Suite (Current)
+## v2.6 — Full Documentation Suite
 
 Added the complete professional documentation set: `ARCHITECTURE.md`, `SECURITY.md`, `DESIGN_DECISIONS.md`, `TESTING.md`, `CONTRIBUTING.md`, `CHANGELOG.md` (this file), `ROADMAP.md`, `RELEASE_NOTES_v2.md`, `SUBMISSION_CHECKLIST.md`, `REVIEWER_GUIDE.md`, `PROJECT_OVERVIEW.md`. README restructured to reduce duplication and act as a navigation hub. No code changes in this round — documentation only.
+
+---
+
+## v2.7 — GenVM Lint Fix (E022) and Redeployment (Current)
+
+**Reviewer feedback addressed:** "The submitted and deployed contract source matches, but the current source fails GenVM lint with E022 diagnostics on seven helper methods because they do not use self as the first parameter."
+
+**Finding:** GenVM lint rule E022 requires every method on a `gl.Contract` subclass to be a plain instance method with `self` as the first parameter. Seven internal helper methods were declared as `@classmethod`/`@staticmethod`, which GenVM's linter does not accept even for pure, stateless logic.
+
+**Fix:** All seven helpers converted to plain instance methods:
+- `_extract_domain` (was `@classmethod`)
+- `_registrable_domain` (was `@classmethod`)
+- `_annotate_sources` (was `@classmethod`)
+- `_classify_content` (was `@classmethod`)
+- `_aggregate` (was `@classmethod`)
+- `_parse_source_verdict` (was `@classmethod`)
+- `_build_prompt` (was `@staticmethod`)
+
+For each, the decorator was removed, the first parameter became `self`, and every internal `cls` reference (class-constant access and cross-calls between helpers) was updated to `self`. No business logic, thresholds, prompts, aggregation rules, or public API (`submit_claim`, `get_claim`, `get_verdict`, `total_claims`) changed. The offline test suite (`tests/`) was updated to call these helpers on a contract instance instead of the class, with zero reduction in coverage — still 87/87 passing.
+
+**Redeployment:** Because the deployed source must match the submitted source, the corrected `contract.py` was redeployed to GenLayer Studio at a new address (the previous address's contract carried the pre-fix source and could not be edited in place):
+
+**New contract address:** `0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5`
+
+A live `submit_claim` transaction on this new deployment reached a `Verified` verdict from 2 independent corroborating sources (Wikipedia, History.com) on the Eiffel Tower claim, with a third source (Britannica) correctly recorded as `inaccessible` rather than silently ignored. Consensus was reached and finalized with no execution errors, confirming the E022 fix did not alter runtime behavior.
+
+The six transactions recorded against the prior (pre-fix) address in [REVIEWER_GUIDE.md § 4](REVIEWER_GUIDE.md#4-live-transaction-evidence) remain as historical evidence of the same underlying logic under the old address; they are labeled there as prior-deployment evidence, not evidence for the current address.

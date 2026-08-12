@@ -14,7 +14,7 @@ TruthBeacon v2 is a complete redesign of a previously rejected GenLayer Intellig
 - **Correct consensus primitive**: uses `gl.eq_principle.prompt_comparative`, not `strict_eq` — a documented anti-pattern for LLM-derived output that was present in an earlier draft and actively found and fixed.
 - **SDK-verified**: every GenLayer API call (`gl.vm.UserError`, `gl.public.write`/`view`, `TreeMap`, `u256`, `gl.nondet.web.render`, `gl.nondet.exec_prompt`, `gl.eq_principle.prompt_comparative`) checked against current official documentation. One incorrect API path (`gl.UserError` → `gl.vm.UserError`) was found and fixed.
 - **87 passing offline tests** across 8 organized files, plus a documented (unexecuted) live-integration example.
-- **Live deployment**: 5 real transactions on GenLayer Studio, covering a clean `Verified` result, a conservative `Unverified` result, live duplicate-domain detection, and unanimous 5-validator rejection of invalid input.
+- **Live deployment**: currently deployed at `0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5` following a GenVM lint fix (E022, see [CHANGELOG.md § v2.7](CHANGELOG.md#v27--genvm-lint-fix-e022-and-redeployment-current)), verified live with a `Verified` result from 2 independent corroborating sources. The prior deployment was exercised with 6 real transactions on GenLayer Studio, covering a clean `Verified` result, a conservative `Unverified` result, live duplicate-domain detection, and unanimous 5-validator rejection of invalid input — see [REVIEWER_GUIDE.md](REVIEWER_GUIDE.md) for full detail on both.
 
 ---
 
@@ -48,18 +48,25 @@ Test count grew from 58 → 87 over these rounds. No functionality was ever remo
 
 ## Live Deployment Summary
 
-**Contract address:** `0xF7275bA620A2a405905f8d93356012166753a62A`
-**Explorer:** https://explorer-studio.genlayer.com/address/0xF7275bA620A2a405905f8d93356012166753a62A
+**Current contract address:** `0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5`
+**Explorer:** https://explorer-studio.genlayer.com/address/0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5
+
+| Transaction | Result | Proves |
+|---|---|---|
+| Eiffel Tower claim (wikipedia.org, britannica.com, history.com) | `Verified` (2 supporting, 1 inaccessible) | The E022-fixed pipeline still works end-to-end on real GenVM infrastructure, with fetch failures still correctly recorded rather than dropped |
+
+**Prior contract address (historical, superseded by the redeployment above):** `0xF7275bA620A2a405905f8d93356012166753a62A`
 
 | Transaction | Result | Proves |
 |---|---|---|
 | Deploy | SUCCESS, 5/5 Agree | Contract deploys cleanly on real GenVM |
 | Apollo 11 claim | `Verified` | Clean multi-source agreement works end-to-end |
 | Neil Armstrong claim | `Unverified` | Conservative aggregation holds even for undisputed facts, live |
-| Eiffel Tower claim | `InsufficientEvidence` | Duplicate-domain detection works live, not just in mocked tests |
+| Eiffel Tower claim (duplicate Wikipedia URLs) | `InsufficientEvidence` | Duplicate-domain detection works live, not just in mocked tests |
 | Invalid 2-source claim | Rejected, 5/5 identical error | Deterministic pre-flight validation works before any fetch/LLM cost |
+| Water boiling point claim | `InsufficientEvidence` | Graceful fetch-failure handling recurs consistently across separate transactions |
 
-Full detail: [REVIEWER_GUIDE.md](REVIEWER_GUIDE.md).
+Full detail on both deployments: [REVIEWER_GUIDE.md](REVIEWER_GUIDE.md).
 
 ---
 

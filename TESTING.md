@@ -8,7 +8,7 @@ TruthBeacon v2 has three tiers of testing: offline unit tests (87, all passing, 
 
 ```mermaid
 flowchart TD
-    A["Tier 3: Live Studio Deployment\n5 real transactions, 5-validator consensus\nSee REVIEWER_GUIDE.md"] --> B
+    A["Tier 3: Live Studio Deployment\n1 current-address transaction + 6 prior-address transactions\nSee REVIEWER_GUIDE.md"] --> B
     B["Tier 2: gltest Integration Example\ngltest_integration_example.py\nNOT executed - see caveat below"] --> C
     C["Tier 1: Offline Unit Tests\n87 tests, 8 files, run right now\npython3 -m unittest discover -s tests"]
 
@@ -79,10 +79,17 @@ gltest test tests/gltest_integration_example.py
 
 ## 4. Tier 3 — Live Deployment Evidence
 
-This is the tier that closes the gap Tier 1 and Tier 2 cannot: real network fetches, real LLM calls from 5 different providers, and real multi-validator consensus, all observed directly.
+This is the tier that closes the gap Tier 1 and Tier 2 cannot: real network fetches, real LLM calls from multiple providers, and real multi-validator consensus, all observed directly.
 
-**Contract address:** `0xF7275bA620A2a405905f8d93356012166753a62A`
-**Public address page (all transactions):** `https://explorer-studio.genlayer.com/address/0xF7275bA620A2a405905f8d93356012166753a62A`
+**Current contract address:** `0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5` (deployed after fixing GenVM lint rule E022 — see [CHANGELOG.md § v2.7](CHANGELOG.md#v27--genvm-lint-fix-e022-and-redeployment-current))
+**Public address page:** `https://explorer-studio.genlayer.com/address/0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5`
+
+| # | Scenario | Result | Consensus |
+|---|---|---|---|
+| 1 | Eiffel Tower claim (3 sources, 1 inaccessible) | `Verified` | Reached consensus, FINALIZED, no errors |
+
+**Prior contract address (historical, superseded):** `0xF7275bA620A2a405905f8d93356012166753a62A`
+**Public address page:** `https://explorer-studio.genlayer.com/address/0xF7275bA620A2a405905f8d93356012166753a62A`
 
 | # | Scenario | Transaction | Result | Consensus |
 |---|---|---|---|---|

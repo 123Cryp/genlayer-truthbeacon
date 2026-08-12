@@ -25,9 +25,10 @@ An earlier version of this contract was **rejected** for checking exactly one ca
 | | |
 |---|---|
 | Offline tests | **87/87 passing**, `python3 -m unittest discover -s tests -p "test_*.py"` |
-| Live deployment | **Yes** — `0xF7275bA620A2a405905f8d93356012166753a62A` on GenLayer Studio |
-| Live transactions | **5**, spanning a clean success, a conservative rejection, live duplicate-domain detection, and unanimous 5-validator input rejection |
-| Public verification | https://explorer-studio.genlayer.com/address/0xF7275bA620A2a405905f8d93356012166753a62A |
+| Live deployment (current) | **Yes** — `0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5` on GenLayer Studio (redeployed after the E022 lint fix, see [CHANGELOG.md § v2.7](CHANGELOG.md#v27--genvm-lint-fix-e022-and-redeployment-current)) |
+| Live transactions (current address) | **1** so far — a `Verified` result from 2 independent corroborating sources, one inaccessible source correctly recorded rather than dropped |
+| Live transactions (prior address, historical) | **6**, spanning a clean success, a conservative rejection, live duplicate-domain detection, and unanimous 5-validator input rejection — see [REVIEWER_GUIDE.md § 4](REVIEWER_GUIDE.md#4-live-transaction-evidence) |
+| Public verification | https://explorer-studio.genlayer.com/address/0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5 |
 
 ## The One-Sentence Pitch
 
@@ -35,7 +36,7 @@ An earlier version of this contract was **rejected** for checking exactly one ca
 
 ## Where to Go Next
 
-- **Verify a claim in 2 minutes:** [REVIEWER_GUIDE.md § 4](REVIEWER_GUIDE.md#4-live-transaction-evidence) — six real transaction hashes, what each proves
+- **Verify a claim in 2 minutes:** [REVIEWER_GUIDE.md § 4](REVIEWER_GUIDE.md#4-live-transaction-evidence) — the current live transaction plus six prior-deployment transaction hashes, what each proves
 - **Understand the design:** [ARCHITECTURE.md](ARCHITECTURE.md)
 - **See the threat model:** [SECURITY.md](SECURITY.md)
 - **See what's honestly not solved:** [SECURITY.md § 8](SECURITY.md#8-known-limitations-not-fixed-by-design), [ROADMAP.md](ROADMAP.md)

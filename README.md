@@ -30,10 +30,10 @@ This is a from-scratch redesign of a previously **rejected** version of this con
 
 ## Live Deployment
 
-**Contract address:** `0xF7275bA620A2a405905f8d93356012166753a62A`
-**Public explorer (all transactions):** https://explorer-studio.genlayer.com/address/0xF7275bA620A2a405905f8d93356012166753a62A
+**Contract address:** `0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5`
+**Public explorer (all transactions):** https://explorer-studio.genlayer.com/address/0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5
 
-This is not just a tested contract — it is a **deployed and exercised** one. Five real transactions on GenLayer Studio demonstrate a clean `Verified` result, a conservative `Unverified` result when evidence was incomplete, live duplicate-domain detection, and unanimous 5-validator rejection of invalid input. Full transaction-by-transaction detail, including what each one proves and how to reproduce it, is in [REVIEWER_GUIDE.md](REVIEWER_GUIDE.md) and [TESTING.md § Tier 3](TESTING.md#4-tier-3--live-deployment-evidence).
+This is not just a tested contract — it is a **deployed and exercised** one. This is a redeployment following a lint fix (GenVM rule E022 — internal helper methods refactored from `@classmethod`/`@staticmethod` to plain instance methods with `self`; no business logic changed, see [CHANGELOG.md](CHANGELOG.md)). On this current address, a live `submit_claim` transaction reached a `Verified` verdict from 2 independent corroborating sources, with a third, inaccessible source correctly recorded as failed rather than silently dropped, and consensus finalized across validators with no execution errors. The prior deployment (superseded by this redeployment) was exercised with six transactions covering clean success, conservative rejection under incomplete evidence, live duplicate-domain detection, and unanimous multi-validator input rejection — full detail, clearly labeled as prior-deployment evidence, is in [REVIEWER_GUIDE.md](REVIEWER_GUIDE.md) and [TESTING.md § Tier 3](TESTING.md#4-tier-3--live-deployment-evidence).
 
 ---
 

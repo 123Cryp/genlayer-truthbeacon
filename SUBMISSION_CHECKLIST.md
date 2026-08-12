@@ -24,16 +24,19 @@ Use this before submitting TruthBeacon to GenLayer review. Each item states what
 ## Deployment
 
 - [x] Contract successfully deployed to GenLayer Studio
-- [x] Contract address recorded: `0xF7275bA620A2a405905f8d93356012166753a62A`
-- [x] Deploy transaction reached FINALIZED/SUCCESS with 5/5 validator agreement
-- [x] At least one successful `submit_claim` transaction with a clean `Verified` result
-- [x] At least one transaction demonstrating conservative behavior (`Unverified`/`InsufficientEvidence`) when evidence was incomplete
-- [x] At least one transaction demonstrating live duplicate-domain detection
-- [x] At least one transaction demonstrating input-validation rejection with consensus on the rejection itself
+- [x] Current contract address recorded: `0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5` (redeployed after fixing GenVM lint rule E022 — see [CHANGELOG.md § v2.7](CHANGELOG.md#v27--genvm-lint-fix-e022-and-redeployment-current))
+- [x] Redeployed source passes GenVM lint (no E022 diagnostics)
+- [x] At least one successful `submit_claim` transaction with a clean `Verified` result on the current address (Eiffel Tower claim, 2/2 independent sources supporting, 1 correctly recorded as inaccessible)
+- [x] Consensus finalized on the current address with no execution errors
+- [x] Prior address (`0xF7275bA620A2a405905f8d93356012166753a62A`, historical) — deploy transaction reached FINALIZED/SUCCESS with 5/5 validator agreement
+- [x] Prior address — at least one transaction demonstrating conservative behavior (`Unverified`/`InsufficientEvidence`) when evidence was incomplete
+- [x] Prior address — at least one transaction demonstrating live duplicate-domain detection
+- [x] Prior address — at least one transaction demonstrating input-validation rejection with consensus on the rejection itself
 
 ## Explorer
 
-- [x] Public contract address page confirmed live and accessible: https://explorer-studio.genlayer.com/address/0xF7275bA620A2a405905f8d93356012166753a62A
+- [x] Public contract address page confirmed live and accessible (current): https://explorer-studio.genlayer.com/address/0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5
+- [x] Public contract address page confirmed live and accessible (prior, historical): https://explorer-studio.genlayer.com/address/0xF7275bA620A2a405905f8d93356012166753a62A
 - [x] Individual transaction links recorded for each demonstration scenario (see [REVIEWER_GUIDE.md](REVIEWER_GUIDE.md))
 
 ## GitHub

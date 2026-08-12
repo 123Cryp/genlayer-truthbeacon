@@ -45,8 +45,27 @@ Expected: `Ran 87 tests ... OK`. No GenLayer node, network access, or API key re
 
 ## 4. Live Transaction Evidence
 
-**Contract address:** `0xF7275bA620A2a405905f8d93356012166753a62A`
-**Public address page (start here — lists every transaction):**
+### 4a. Current Deployment (Post-E022-Fix)
+
+**Contract address:** `0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5`
+**Public address page:**
+https://explorer-studio.genlayer.com/address/0xE30A0F67Da4a3F58F2E31C82dfbc50e8B8F588A5
+
+This is a redeployment of the same contract logic after fixing GenVM lint rule E022 (seven internal helper methods converted from `@classmethod`/`@staticmethod` to plain instance methods — see [CHANGELOG.md § v2.7](CHANGELOG.md#v27--genvm-lint-fix-e022-and-redeployment-current)). No business logic changed; this transaction confirms the fix didn't alter runtime behavior.
+
+**Verification transaction — Eiffel Tower claim**
+`claim_text`: "The Eiffel Tower is located in Paris, France."
+`source_urls`: `en.wikipedia.org/wiki/Eiffel_Tower`, `britannica.com/topic/Eiffel-Tower`, `history.com/topics/landmarks/eiffel-tower`
+**Result:** `final_verdict: "Verified"`, `independent_domain_count: 2`, `failed_source_count: 1`. Wikipedia and History.com returned `ok`/`Supported`; Britannica returned `inaccessible` and was correctly excluded from corroboration rather than silently dropped.
+**Consensus:** `REVEALING` → `ACCEPTED` → `Reached consensus` → `FINALIZED`, no execution errors.
+**Proves:** the corrected contract deploys cleanly and the full pipeline (fetch → classify → LLM judge → aggregate → consensus → store) still works end-to-end after the E022 fix.
+
+### 4b. Prior Deployment (Historical — Superseded)
+
+The transactions below were run against the contract's **prior address**, before the E022 lint fix required redeployment. They remain valid evidence of the underlying logic (which did not change in the fix) but are **not** transactions on the current address above.
+
+**Prior contract address:** `0xF7275bA620A2a405905f8d93356012166753a62A`
+**Public address page:**
 https://explorer-studio.genlayer.com/address/0xF7275bA620A2a405905f8d93356012166753a62A
 
 ### Transaction 1 — Deploy
@@ -115,7 +134,10 @@ Rows marked "—" in the "proven live" column are covered by offline tests but w
 No — the offline stub only mocks `gl.nondet.web.render` and `gl.nondet.exec_prompt` (the two calls that genuinely can't run without a live network/LLM). Every deterministic function (`_aggregate`, `_classify_content`, `_registrable_domain`, `_parse_source_verdict`, input validation) is called directly, unmocked. See [TESTING.md § 2c](TESTING.md#2c-what-tier-1-does-not-prove) for an explicit statement of what the offline tests do *not* prove, and why the live transactions in §4 above close that gap.
 
 **"Couldn't the live transactions have been cherry-picked to look good?"**
-Three of the five demonstration transactions (Tx 3, 4, 6) show *negative* or *conservative* results (`Unverified`, `InsufficientEvidence`), not clean successes. This is intentional — a contract that only ever shows off its best-case behavior would itself be evidence of overclaiming. See [CHANGELOG.md § v2.5](CHANGELOG.md#v25--live-deployment).
+Three of the six prior-deployment demonstration transactions (Tx 3, 4, 6 in §4b) show *negative* or *conservative* results (`Unverified`, `InsufficientEvidence`), not clean successes. This is intentional — a contract that only ever shows off its best-case behavior would itself be evidence of overclaiming. See [CHANGELOG.md § v2.5](CHANGELOG.md#v25--live-deployment).
+
+**"Why is there only one transaction on the current address?"**
+The current address (§4a) exists only because GenVM lint rule E022 required a source change (classmethod/staticmethod → instance methods) that could not be applied to an already-deployed contract in place — it necessarily produced a new address. The one verification transaction there confirms the fix preserved runtime behavior; the six prior-deployment transactions in §4b remain valid evidence of the same underlying logic, which was not altered by the fix.
 
 **"Why does `contract.py` use `gl.vm.UserError` and not just `Exception`?"**
 This was a real bug in an earlier draft, found during a dedicated SDK compatibility audit and fixed — see [CHANGELOG.md § v2.4](CHANGELOG.md#v24--sdk-compatibility-audit).
