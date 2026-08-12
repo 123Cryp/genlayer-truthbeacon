@@ -1,10 +1,5 @@
 # TruthBeacon v2 — Corroborated AI Fact-Checking on GenLayer
 
-![License](https://img.shields.io/badge/license-MIT-blue)
-![Tests](https://img.shields.io/badge/tests-87%20passing-brightgreen)
-![GenLayer](https://img.shields.io/badge/GenLayer-Studio%20Deployed-6c5ce7)
-![Python](https://img.shields.io/badge/python-3.x-blue)
-
 TruthBeacon is a GenLayer Intelligent Contract for decentralized fact-checking. Anyone submits a claim together with candidate source URLs; GenLayer's validators independently fetch and judge each source, and reach Optimistic Democracy consensus on one deterministic final verdict, stored permanently on-chain with a full, auditable evidence trail.
 
 This is a from-scratch redesign of a previously **rejected** version of this contract (see [Reviewer Feedback Addressed](#reviewer-feedback-addressed) below), and has since been **deployed and tested live on GenLayer Studio** (see [Live Deployment](#live-deployment)).
