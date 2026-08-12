@@ -267,8 +267,7 @@ class TruthBeacon(gl.Contract):
     # (no gl.* calls here - safe to reason about / unit test in isolation)
     # ======================================================================
 
-    @classmethod
-    def _extract_domain(cls, url: str) -> str:
+    def _extract_domain(self, url: str) -> str:
         """
         Extract an approximate REGISTRABLE domain from a URL, without
         relying on any external parsing library or a live Public
@@ -292,7 +291,7 @@ class TruthBeacon(gl.Contract):
         # or ever attempting a fetch - bounds both storage cost and
         # the cost of a wasted gl.nondet.web.render call on obvious
         # junk input.
-        if len(u) > cls.MAX_URL_CHARS:
+        if len(u) > self.MAX_URL_CHARS:
             return ""
 
         scheme_ok = False
@@ -348,10 +347,9 @@ class TruthBeacon(gl.Contract):
         if not u:
             return ""
 
-        return cls._registrable_domain(u)
+        return self._registrable_domain(u)
 
-    @classmethod
-    def _registrable_domain(cls, host: str) -> str:
+    def _registrable_domain(self, host: str) -> str:
         """
         Reduce a normalized hostname to an approximate registrable
         domain ("eTLD+1"-ish), so that e.g. "news.example.com",
@@ -392,13 +390,12 @@ class TruthBeacon(gl.Contract):
             return host
 
         last_two = ".".join(labels[-2:])
-        if last_two in cls.KNOWN_MULTI_PART_SUFFIXES:
+        if last_two in self.KNOWN_MULTI_PART_SUFFIXES:
             return ".".join(labels[-3:])
 
         return last_two
 
-    @classmethod
-    def _annotate_sources(cls, source_urls):
+    def _annotate_sources(self, source_urls):
         """
         Deterministically annotate each candidate source with
         provenance metadata BEFORE any network access happens:
@@ -420,7 +417,7 @@ class TruthBeacon(gl.Contract):
         seen_domains = set()
         annotated = []
         for raw_url in source_urls:
-            domain = cls._extract_domain(raw_url)
+            domain = self._extract_domain(raw_url)
             valid_scheme = domain != ""
             is_duplicate = valid_scheme and domain in seen_domains
             if valid_scheme and not is_duplicate:
@@ -431,13 +428,12 @@ class TruthBeacon(gl.Contract):
                     "domain": domain,
                     "valid_scheme": valid_scheme,
                     "is_duplicate_domain": is_duplicate,
-                    "is_low_credibility": domain in cls.LOW_CREDIBILITY_DOMAINS,
+                    "is_low_credibility": domain in self.LOW_CREDIBILITY_DOMAINS,
                 }
             )
         return annotated
 
-    @classmethod
-    def _classify_content(cls, content: str):
+    def _classify_content(self, content: str):
         """
         Deterministically classify fetched page content as usable,
         empty, or malformed. Runs on already-fetched text, so it can
@@ -482,13 +478,13 @@ class TruthBeacon(gl.Contract):
         # Catches both "too short to mean anything" (e.g. "hi") and
         # "long but not actually made of words" (e.g. one giant
         # repeated character with no whitespace at all).
-        if length < cls.MIN_CONTENT_CHARS or word_count < cls.MIN_CONTENT_WORDS:
+        if length < self.MIN_CONTENT_CHARS or word_count < self.MIN_CONTENT_WORDS:
             return "malformed", False
 
         # --- Check 3: printable-character ratio ---
         printable = sum(1 for ch in stripped if ch.isprintable())
         printable_ratio = printable / length
-        if printable_ratio < cls.MIN_PRINTABLE_RATIO:
+        if printable_ratio < self.MIN_PRINTABLE_RATIO:
             return "malformed", False
 
         # --- Check 4: alphabetic-character ratio ---
@@ -498,17 +494,17 @@ class TruthBeacon(gl.Contract):
         # anything an LLM could meaningfully fact-check.
         alpha = sum(1 for ch in stripped if ch.isalpha())
         alpha_ratio = alpha / length
-        if alpha_ratio < cls.MIN_ALPHA_RATIO:
+        if alpha_ratio < self.MIN_ALPHA_RATIO:
             return "malformed", False
 
         # --- Check 5: word-level diversity (repeated-garbage guard) ---
         # Only evaluated once there are "enough" words that repetition
         # is a meaningful signal - short legitimate sentences naturally
         # reuse common words ("the", "a", "is") without being spam.
-        if word_count >= cls.WORD_DIVERSITY_CHECK_MIN_WORDS:
+        if word_count >= self.WORD_DIVERSITY_CHECK_MIN_WORDS:
             unique_words = len({w.lower() for w in words})
             diversity_ratio = unique_words / word_count
-            if diversity_ratio < cls.MIN_WORD_DIVERSITY_RATIO:
+            if diversity_ratio < self.MIN_WORD_DIVERSITY_RATIO:
                 return "malformed", False
 
         # --- Check 6: short boilerplate / bot-wall pages ---
@@ -517,15 +513,14 @@ class TruthBeacon(gl.Contract):
         # that are both short AND contain one of the marker phrases,
         # which together are a strong signal of a block/challenge
         # page rather than real article content.
-        if word_count <= cls.BOILERPLATE_MAX_WORDS:
+        if word_count <= self.BOILERPLATE_MAX_WORDS:
             lowered = stripped.lower()
-            if any(marker in lowered for marker in cls.BOILERPLATE_MARKERS):
+            if any(marker in lowered for marker in self.BOILERPLATE_MARKERS):
                 return "malformed", False
 
         return "ok", True
 
-    @classmethod
-    def _aggregate(cls, records):
+    def _aggregate(self, records):
         """
         Deterministically combine per-source verdicts into ONE final
         verdict drawn from FINAL_VERDICTS.
@@ -550,18 +545,17 @@ class TruthBeacon(gl.Contract):
         oppose = sum(1 for r in eligible if r["verdict"] == "NotSupported")
         independent_total = len(eligible)
 
-        if independent_total < cls.MIN_INDEPENDENT_DOMAINS:
+        if independent_total < self.MIN_INDEPENDENT_DOMAINS:
             return "InsufficientEvidence"
-        if support >= cls.MIN_INDEPENDENT_DOMAINS and support > oppose:
+        if support >= self.MIN_INDEPENDENT_DOMAINS and support > oppose:
             return "Verified"
-        if oppose >= cls.MIN_INDEPENDENT_DOMAINS and oppose > support:
+        if oppose >= self.MIN_INDEPENDENT_DOMAINS and oppose > support:
             return "Refuted"
         if support > 0 and oppose > 0:
             return "Disputed"
         return "Unverified"
 
-    @classmethod
-    def _parse_source_verdict(cls, raw: str) -> str:
+    def _parse_source_verdict(self, raw: str) -> str:
         """
         Deterministically map a raw LLM response to one of the three
         source-verdict words (SOURCE_VERDICTS[:3] == "Supported",
@@ -599,13 +593,12 @@ class TruthBeacon(gl.Contract):
         for line in raw.splitlines():
             candidate = line.strip().strip(".,!?\"'").strip()
             candidate_compact = "".join(candidate.split()).lower()
-            for option in cls.SOURCE_VERDICTS[:3]:
+            for option in self.SOURCE_VERDICTS[:3]:
                 if candidate_compact == option.lower():
                     return option
         return "Unclear"
 
-    @staticmethod
-    def _build_prompt(claim_text: str, source_content: str) -> str:
+    def _build_prompt(self, claim_text: str, source_content: str) -> str:
         """
         Build a hardened fact-checking prompt.
 
