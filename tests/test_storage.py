@@ -42,7 +42,7 @@ class TestViewMethods(unittest.TestCase):
             return "A sufficiently long, legitimate article body. " * 3
 
         def prompt(p, response_format="text"):
-            return "Supported"
+            return "Supported\nCurrent"
 
         with patch.object(gl.nondet.web, "render", side_effect=fetch), patch.object(
             gl.nondet, "exec_prompt", side_effect=prompt
@@ -69,7 +69,12 @@ class TestStoragePersistence(unittest.TestCase):
             return "A sufficiently long, legitimate article body. " * 3
 
         def prompt(p, response_format="text"):
-            return verdict_word
+            # v2.8: the mocked model must also supply a freshness
+            # line, or the new is_stale gate (see _aggregate) would
+            # exclude every source and change these tests' expected
+            # final_verdict out from under them. "Current" preserves
+            # the original, pre-v2.8 fixture behavior exactly.
+            return f"{verdict_word}\nCurrent"
 
         with patch.object(
             gl.nondet.web, "render", side_effect=fetch

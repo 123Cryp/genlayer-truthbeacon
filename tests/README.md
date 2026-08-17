@@ -29,15 +29,15 @@ for how to run it separately once you have those available.
 
 | File | Tests | What it covers |
 |---|---|---|
-| `test_domain_extraction.py` | 18 | `_extract_domain` / `_registrable_domain`: the four required subdomain-independence cases, multi-part suffix handling (`co.uk`, ...), IPv6 literals, trailing DNS dots, length limits, invalid schemes |
+| `test_domain_extraction.py` | 26 | `_extract_domain` / `_registrable_domain`: the four required subdomain-independence cases, multi-part suffix handling (`co.uk`, ...), IPv6 literals, trailing DNS dots, length limits, invalid schemes; plus (v2.8) `_normalize_domain_declaration` for `expected_domains` entries |
 | `test_content_classification.py` | 11 | `_classify_content`: all five malformed-content checks (length, word count, printable ratio, alpha ratio, diversity) plus boilerplate detection, and explicit "must NOT false-positive" cases |
-| `test_aggregation.py` | 9 | `_aggregate`: every branch of the final-verdict decision rule, including majority-with-dissent, duplicate/low-credibility exclusion |
+| `test_aggregation.py` | 15 | `_aggregate`: every branch of the final-verdict decision rule, including majority-with-dissent, duplicate/low-credibility exclusion; plus (v2.8) staleness and source-authority exclusion, and missing-key backward compatibility |
 | `test_parser.py` | 8 | `_parse_source_verdict`: exact/case-insensitive matching, multi-line responses, whitespace tolerance, substring false-positive guard |
-| `test_prompt_and_consensus.py` | 11 | `_build_prompt` guardrail presence (injection, quoted claims, opinions, syndication, speculation) and `EQUIVALENCE_PRINCIPLE` schema consistency |
+| `test_prompt_and_consensus.py` | 12 | `_build_prompt` guardrail presence (injection, quoted claims, opinions, syndication, speculation, v2.8 freshness) and `EQUIVALENCE_PRINCIPLE` schema consistency |
 | `test_input_validation.py` | 9 | `submit_claim`'s pre-fetch validation: source-count bounds, length limits, denylist-only rejection, `gl.vm.UserError` typing |
-| `test_end_to_end.py` | 13 | Full `submit_claim` → `get_claim` pipeline: verification, refutation, disputes, duplicates, failures, adversarial sources |
+| `test_end_to_end.py` | 22 | Full `submit_claim` → `get_claim` pipeline: verification, refutation, disputes, duplicates, failures, adversarial sources; plus (v2.8) `expected_domains` policy enforcement and freshness/staleness gating |
 | `test_storage.py` | 8 | `get_claim` / `get_verdict` / `total_claims`, and multi-claim storage isolation |
-| **Total** | **87** | |
+| **Total** | **111** | |
 
 ## Why split like this instead of one file
 
@@ -69,3 +69,5 @@ Every item explicitly requested for this project maps to a test file:
 - ✅ content classification → `test_content_classification.py`
 - ✅ boundary values → length limits in `test_domain_extraction.py` / `test_input_validation.py`, threshold edges in `test_content_classification.py`
 - ✅ storage persistence → `test_storage.py`
+- ✅ source-authority policy (`expected_domains`) → `test_domain_extraction.py`, `test_aggregation.py`, `test_end_to_end.py`
+- ✅ freshness / staleness gating → `test_prompt_and_consensus.py`, `test_aggregation.py`, `test_end_to_end.py`

@@ -76,7 +76,15 @@ class TestPromptGuardrails(unittest.TestCase):
         # comparator-friendly output vocabulary.
         for word in ("Supported", "NotSupported", "Unclear"):
             self.assertIn(word, self.prompt)
-        self.assertIn("ONLY one single word", self.prompt)
+        self.assertIn("EXACTLY TWO LINES", self.prompt)
+
+    def test_contains_freshness_guardrail(self):
+        # v2.8: the freshness judgment is a separate line, with its
+        # own fixed vocabulary, requested independently of the
+        # verdict.
+        for word in ("Current", "Stale", "Undated"):
+            self.assertIn(word, self.prompt)
+        self.assertIn("FRESHNESS", self.prompt)
 
 
 class TestEquivalencePrinciple(unittest.TestCase):
@@ -95,10 +103,13 @@ class TestEquivalencePrinciple(unittest.TestCase):
             "final_verdict",
             "fetch_status",
             "verdict",
+            "freshness",
             "records",
             "independent_domain_count",
             "duplicate_domain_count",
             "failed_source_count",
+            "stale_source_count",
+            "unauthorized_domain_count",
         ):
             self.assertIn(field_name, principle)
 

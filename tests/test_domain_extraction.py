@@ -171,5 +171,59 @@ class TestDomainExtraction(unittest.TestCase):
         self.assertEqual(_helper._extract_domain(too_long), "")
 
 
+class TestNormalizeDomainDeclaration(unittest.TestCase):
+    """
+    Pure function: a caller-declared `expected_domains` entry (see
+    submit_claim, v2.8) -> the same approximate registrable-domain
+    form _extract_domain computes for actual source URLs.
+
+    This is what lets submit_claim compare "the domain a fetched
+    source actually resolved to" against "the domain the claim
+    creator pre-declared as authorized" using one consistent
+    representation on both sides.
+    """
+
+    def test_bare_domain_is_normalized(self):
+        self.assertEqual(
+            _helper._normalize_domain_declaration("reuters.com"), "reuters.com"
+        )
+
+    def test_bare_domain_with_www_normalizes_same_as_without(self):
+        self.assertEqual(
+            _helper._normalize_domain_declaration("www.reuters.com"),
+            "reuters.com",
+        )
+
+    def test_full_url_normalizes_to_same_domain_as_bare_form(self):
+        self.assertEqual(
+            _helper._normalize_domain_declaration("https://reuters.com/article"),
+            "reuters.com",
+        )
+
+    def test_uppercase_and_whitespace_are_normalized(self):
+        self.assertEqual(
+            _helper._normalize_domain_declaration("  Reuters.COM  "),
+            "reuters.com",
+        )
+
+    def test_multi_part_suffix_domain_is_normalized_consistently(self):
+        # Delegates to _extract_domain, so it inherits the same
+        # KNOWN_MULTI_PART_SUFFIXES handling as real source URLs.
+        self.assertEqual(
+            _helper._normalize_domain_declaration("bbc.co.uk"), "bbc.co.uk"
+        )
+
+    def test_empty_string_is_invalid(self):
+        self.assertEqual(_helper._normalize_domain_declaration(""), "")
+        self.assertEqual(_helper._normalize_domain_declaration("   "), "")
+
+    def test_overlong_entry_is_invalid(self):
+        too_long = "a" * (TruthBeacon.MAX_URL_CHARS + 1) + ".com"
+        self.assertEqual(_helper._normalize_domain_declaration(too_long), "")
+
+    def test_unparseable_entry_is_invalid(self):
+        self.assertEqual(_helper._normalize_domain_declaration("ftp://x.com"), "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

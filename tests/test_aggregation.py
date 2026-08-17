@@ -21,7 +21,20 @@ _helper = make_contract()
 class TestAggregation(unittest.TestCase):
     """Pure function: per-source records -> single final verdict."""
 
-    def _rec(self, verdict, domain, status="ok", dup=False, low_cred=False):
+    def _rec(
+        self,
+        verdict,
+        domain,
+        status="ok",
+        dup=False,
+        low_cred=False,
+        stale=False,
+        authorized=True,
+    ):
+        # `stale` / `authorized` default to the values that preserve
+        # pre-v2.8 behavior (not stale, authorized) so every
+        # pre-existing call site below - which doesn't pass these two
+        # new kwargs at all - is completely unaffected.
         return {
             "url": f"https://{domain}/a",
             "domain": domain,
@@ -29,6 +42,8 @@ class TestAggregation(unittest.TestCase):
             "is_low_credibility": low_cred,
             "fetch_status": status,
             "verdict": verdict,
+            "is_stale": stale,
+            "is_authorized_domain": authorized,
         }
 
     def test_two_independent_supports_yields_verified(self):
@@ -109,6 +124,107 @@ class TestAggregation(unittest.TestCase):
             self._rec("Unclear", "b.com"),
         ]
         self.assertEqual(_helper._aggregate(records), "Unverified")
+
+    # --- v2.8: freshness gating (see CHANGELOG.md) ---
+
+    def test_stale_source_not_counted_as_corroboration(self):
+        # Two supporting sources, but one is explicitly flagged stale
+        # - same exclusion shape as the existing duplicate-domain
+        # test: a stale source must not be able to prop up a verdict
+        # any more than a duplicate-domain one can.
+        records = [
+            self._rec("Supported", "a.com"),
+            self._rec("Supported", "b.com", stale=True),
+        ]
+        self.assertEqual(_helper._aggregate(records), "InsufficientEvidence")
+
+    def test_undated_source_excluded_same_as_stale(self):
+        # "Undated" is folded into is_stale=True by the nondet()
+        # closure in submit_claim (see _parse_freshness_label /
+        # is_stale computation) before records ever reach
+        # _aggregate, so at this pure-function level "undated" and
+        # "stale" are indistinguishable - both just set is_stale=True.
+        records = [
+            self._rec("Supported", "a.com"),
+            self._rec("Supported", "b.com", stale=True),
+            self._rec("Supported", "c.com", stale=True),
+        ]
+        self.assertEqual(_helper._aggregate(records), "InsufficientEvidence")
+
+    def test_two_fresh_supports_still_verify_with_a_stale_third(self):
+        # A stale source among otherwise-sufficient fresh corroboration
+        # doesn't poison the whole result - it's simply excluded, and
+        # the remaining two fresh, independent supports are enough on
+        # their own.
+        records = [
+            self._rec("Supported", "a.com"),
+            self._rec("Supported", "b.com"),
+            self._rec("Supported", "c.com", stale=True),
+        ]
+        self.assertEqual(_helper._aggregate(records), "Verified")
+
+    def test_missing_freshness_key_defaults_to_not_stale(self):
+        # Backward compatibility: a record dict built without the
+        # is_stale key at all (as every record did before v2.8) must
+        # behave exactly as it did before - _aggregate reads it via
+        # `.get("is_stale", False)`, never raises KeyError, and
+        # treats the source as eligible.
+        records = [
+            {
+                "url": "https://a.com/x",
+                "domain": "a.com",
+                "is_duplicate_domain": False,
+                "is_low_credibility": False,
+                "fetch_status": "ok",
+                "verdict": "Supported",
+            },
+            {
+                "url": "https://b.com/x",
+                "domain": "b.com",
+                "is_duplicate_domain": False,
+                "is_low_credibility": False,
+                "fetch_status": "ok",
+                "verdict": "Supported",
+            },
+        ]
+        self.assertEqual(_helper._aggregate(records), "Verified")
+
+    # --- v2.8: source-authority gating (see CHANGELOG.md) ---
+
+    def test_unauthorized_domain_not_counted_as_corroboration(self):
+        # A source outside the claim's declared expected_domains
+        # policy must not be able to count toward corroboration, even
+        # if it's otherwise a perfectly healthy, credible, fresh
+        # source.
+        records = [
+            self._rec("Supported", "a.com"),
+            self._rec("Supported", "b.com", authorized=False),
+        ]
+        self.assertEqual(_helper._aggregate(records), "InsufficientEvidence")
+
+    def test_missing_authorized_key_defaults_to_authorized(self):
+        # Same backward-compatibility guarantee as is_stale: a record
+        # dict without is_authorized_domain at all behaves exactly as
+        # it did before v2.8 - fully eligible.
+        records = [
+            {
+                "url": "https://a.com/x",
+                "domain": "a.com",
+                "is_duplicate_domain": False,
+                "is_low_credibility": False,
+                "fetch_status": "ok",
+                "verdict": "Supported",
+            },
+            {
+                "url": "https://b.com/x",
+                "domain": "b.com",
+                "is_duplicate_domain": False,
+                "is_low_credibility": False,
+                "fetch_status": "ok",
+                "verdict": "Supported",
+            },
+        ]
+        self.assertEqual(_helper._aggregate(records), "Verified")
 
 
 if __name__ == "__main__":

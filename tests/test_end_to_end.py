@@ -30,13 +30,20 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
     def setUp(self):
         self.contract = make_contract()
 
-    def _run_with(self, fetch_side_effect, prompt_side_effect, claim, urls):
+    def _run_with(
+        self, fetch_side_effect, prompt_side_effect, claim, urls, expected_domains=None
+    ):
         with patch.object(
             gl.nondet.web, "render", side_effect=fetch_side_effect
         ), patch.object(
             gl.nondet, "exec_prompt", side_effect=prompt_side_effect
         ):
-            claim_id = self.contract.submit_claim(claim, urls)
+            if expected_domains is None:
+                claim_id = self.contract.submit_claim(claim, urls)
+            else:
+                claim_id = self.contract.submit_claim(
+                    claim, urls, expected_domains=expected_domains
+                )
         return json.loads(self.contract.get_claim(claim_id))
 
     def test_successful_verification_three_independent_agreeing_sources(self):
@@ -50,7 +57,7 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
             return "Long, legitimate-looking article body confirming the claim. " * 3
 
         def prompt(p, response_format="text"):
-            return "Supported"
+            return "Supported\nCurrent"
 
         result = self._run_with(fetch, prompt, "Water boils at 100C at sea level", urls)
 
@@ -81,7 +88,7 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
             return "Long, legitimate-looking article body refuting the claim. " * 3
 
         def prompt(p, response_format="text"):
-            return "NotSupported"
+            return "NotSupported\nCurrent"
 
         result = self._run_with(fetch, prompt, "The moon is made of cheese", urls)
 
@@ -102,10 +109,10 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
             # Look at which source this is via a crude marker embedded
             # by the fetch fixture below.
             if "MARKER_A" in p:
-                return "Supported"
+                return "Supported\nCurrent"
             if "MARKER_B" in p:
-                return "NotSupported"
-            return "Unclear"
+                return "NotSupported\nCurrent"
+            return "Unclear\nCurrent"
 
         # We can't see which URL is being fetched from inside prompt(),
         # so make fetch() return distinguishable content per source.
@@ -135,7 +142,7 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
             return "A sufficiently long article body about the claim. " * 3
 
         def prompt(p, response_format="text"):
-            return "Supported"
+            return "Supported\nCurrent"
 
         result = self._run_with(fetch, prompt, "Some claim", urls)
 
@@ -163,7 +170,7 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
             return "A sufficiently long article body about the claim. " * 3
 
         def prompt(p, response_format="text"):
-            return "Supported"
+            return "Supported\nCurrent"
 
         result = self._run_with(fetch, prompt, "Some claim", urls)
 
@@ -199,7 +206,7 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
             return syndicated_text
 
         def prompt(p, response_format="text"):
-            return "Supported"
+            return "Supported\nCurrent"
 
         result = self._run_with(fetch, prompt, "Some claim", urls)
 
@@ -233,7 +240,7 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
             )
 
         def prompt(p, response_format="text"):
-            return "Unclear"
+            return "Unclear\nCurrent"
 
         result = self._run_with(fetch, prompt, "A contested claim", urls)
 
@@ -259,8 +266,8 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
 
         def prompt(p, response_format="text"):
             if "OPINION_MARKER" in p:
-                return "Unclear"
-            return "Supported"
+                return "Unclear\nCurrent"
+            return "Supported\nCurrent"
 
         def fetch(url, mode="text"):
             if "opinion-blog" in url:
@@ -298,7 +305,7 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
             return "A sufficiently long, legitimate article body. " * 3
 
         def prompt(p, response_format="text"):
-            return "Supported"
+            return "Supported\nCurrent"
 
         result = self._run_with(fetch, prompt, "Some claim", urls)
 
@@ -329,7 +336,7 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
             return "A perfectly fine, sufficiently long article body. " * 3
 
         def prompt(p, response_format="text"):
-            return "Supported"
+            return "Supported\nCurrent"
 
         result = self._run_with(fetch, prompt, "Some claim", urls)
 
@@ -370,7 +377,7 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
             return "A long article body that reads convincingly either way. " * 3
 
         def prompt(p, response_format="text"):
-            return "Supported"
+            return "Supported\nCurrent"
 
         result = self._run_with(fetch, prompt, "An implausible claim", urls)
 
@@ -444,6 +451,214 @@ class TestSubmitClaimEndToEnd(unittest.TestCase):
             result["final_verdict"],
             TruthBeacon.FINAL_VERDICTS,
         )
+
+    # --- v2.8: source-authority policy (expected_domains) ---
+
+    def test_expected_domains_restricts_corroboration_to_declared_set(self):
+        # Three otherwise-perfectly-good supporting sources, but only
+        # two of the three domains were pre-declared as authorized
+        # for this claim. The third must still be fetched and
+        # recorded (full provenance) but excluded from corroboration.
+        urls = [
+            "https://reuters.example/a",
+            "https://apnews.example/b",
+            "https://not-declared.example/c",
+        ]
+
+        def fetch(url, mode="text"):
+            return "Long, legitimate-looking article body confirming the claim. " * 3
+
+        def prompt(p, response_format="text"):
+            return "Supported\nCurrent"
+
+        result = self._run_with(
+            fetch,
+            prompt,
+            "Some claim",
+            urls,
+            expected_domains=["reuters.example", "apnews.example"],
+        )
+
+        self.assertEqual(result["final_verdict"], "Verified")
+        self.assertEqual(result["unauthorized_domain_count"], 1)
+        self.assertEqual(
+            sorted(result["expected_domains"]),
+            ["apnews.example", "reuters.example"],
+        )
+        undeclared = next(
+            s for s in result["sources"] if s["domain"] == "not-declared.example"
+        )
+        self.assertFalse(undeclared["is_authorized_domain"])
+        # It was still fetched and judged - just excluded from the
+        # corroboration count, exactly like a duplicate-domain source.
+        self.assertEqual(undeclared["fetch_status"], "ok")
+        self.assertEqual(undeclared["verdict"], "Supported")
+
+    def test_expected_domains_accepts_full_urls_as_entries(self):
+        # expected_domains entries may be full http(s) URLs, not just
+        # bare domains - both forms must normalize identically.
+        urls = [
+            "https://reuters.example/a",
+            "https://apnews.example/b",
+            "https://bbc.example/c",
+        ]
+
+        def fetch(url, mode="text"):
+            return "Long, legitimate-looking article body confirming the claim. " * 3
+
+        def prompt(p, response_format="text"):
+            return "Supported\nCurrent"
+
+        result = self._run_with(
+            fetch,
+            prompt,
+            "Some claim",
+            urls,
+            expected_domains=[
+                "https://reuters.example/some/path",
+                "apnews.example",
+                "bbc.example",
+            ],
+        )
+        self.assertEqual(result["final_verdict"], "Verified")
+        self.assertEqual(result["unauthorized_domain_count"], 0)
+
+    def test_omitting_expected_domains_is_fully_backward_compatible(self):
+        # No expected_domains at all -> identical behavior to pre-v2.8:
+        # every domain is authorized, expected_domains persists as [].
+        urls = [
+            "https://reuters.example/a",
+            "https://apnews.example/b",
+            "https://bbc.example/c",
+        ]
+
+        def fetch(url, mode="text"):
+            return "Long, legitimate-looking article body confirming the claim. " * 3
+
+        def prompt(p, response_format="text"):
+            return "Supported\nCurrent"
+
+        result = self._run_with(fetch, prompt, "Some claim", urls)
+        self.assertEqual(result["final_verdict"], "Verified")
+        self.assertEqual(result["unauthorized_domain_count"], 0)
+        self.assertEqual(result["expected_domains"], [])
+
+    def test_expected_domains_with_no_matching_sources_is_rejected_upfront(self):
+        # Fails fast (before any fetch/LLM call) rather than silently
+        # returning InsufficientEvidence after spending fetch cost.
+        c = make_contract()
+        urls = [
+            "https://reuters.example/a",
+            "https://apnews.example/b",
+            "https://bbc.example/c",
+        ]
+        with self.assertRaises(Exception):
+            c.submit_claim(
+                "Some claim", urls, expected_domains=["totally-unrelated.example"]
+            )
+
+    def test_too_many_expected_domains_is_rejected(self):
+        c = make_contract()
+        urls = [
+            "https://reuters.example/a",
+            "https://apnews.example/b",
+            "https://bbc.example/c",
+        ]
+        too_many = [f"site{i}.example" for i in range(TruthBeacon.MAX_EXPECTED_DOMAINS + 1)]
+        with self.assertRaises(Exception):
+            c.submit_claim("Some claim", urls, expected_domains=too_many)
+
+    def test_invalid_expected_domains_entry_is_rejected(self):
+        c = make_contract()
+        urls = [
+            "https://reuters.example/a",
+            "https://apnews.example/b",
+            "https://bbc.example/c",
+        ]
+        with self.assertRaises(Exception):
+            c.submit_claim("Some claim", urls, expected_domains=[""])
+
+    # --- v2.8: freshness gating (stale / undated content) ---
+
+    def test_stale_source_excluded_from_corroboration_end_to_end(self):
+        urls = [
+            "https://reuters.example/a",
+            "https://apnews.example/b",
+            "https://bbc.example/c",
+        ]
+
+        # Distinguish sources via fetch content markers, since
+        # prompt() only sees the built prompt text (which does embed
+        # the fetched source content).
+        def fetch2(url, mode="text"):
+            if "bbc" in url:
+                return (
+                    "STALE_MARKER An old article from several years ago "
+                    "confirming the claim. " * 3
+                )
+            return "Long, legitimate-looking article body confirming the claim. " * 3
+
+        def prompt2(p, response_format="text"):
+            if "STALE_MARKER" in p:
+                return "Supported\nStale"
+            return "Supported\nCurrent"
+
+        result = self._run_with(fetch2, prompt2, "Some claim", urls)
+
+        self.assertEqual(result["final_verdict"], "Verified")
+        self.assertEqual(result["stale_source_count"], 1)
+        bbc_record = next(s for s in result["sources"] if s["domain"] == "bbc.example")
+        self.assertEqual(bbc_record["freshness"], "Stale")
+        self.assertTrue(bbc_record["is_stale"])
+        # Still fetched, still judged Supported - just excluded from
+        # corroboration, same as a duplicate or low-credibility domain.
+        self.assertEqual(bbc_record["verdict"], "Supported")
+
+    def test_undated_source_excluded_from_corroboration_end_to_end(self):
+        urls = [
+            "https://reuters.example/a",
+            "https://apnews.example/b",
+            "https://bbc.example/c",
+        ]
+
+        def fetch(url, mode="text"):
+            return "Long, legitimate-looking article body confirming the claim. " * 3
+
+        def prompt(p, response_format="text"):
+            # Off-vocabulary freshness line -> _parse_freshness_label
+            # defaults to "Undated", which _aggregate excludes exactly
+            # like "Stale".
+            return "Supported\nWhoKnows"
+
+        result = self._run_with(fetch, prompt, "Some claim", urls)
+
+        self.assertEqual(result["final_verdict"], "InsufficientEvidence")
+        self.assertEqual(result["stale_source_count"], 3)
+        for source in result["sources"]:
+            self.assertEqual(source["freshness"], "Undated")
+
+    def test_failed_fetch_freshness_is_not_applicable(self):
+        urls = [
+            "https://reuters.example/a",
+            "https://apnews.example/b",
+            "https://bbc.example/c",
+        ]
+
+        def fetch(url, mode="text"):
+            if "reuters" in url:
+                raise TimeoutError("connection timed out")
+            return "Long, legitimate-looking article body confirming the claim. " * 3
+
+        def prompt(p, response_format="text"):
+            return "Supported\nCurrent"
+
+        result = self._run_with(fetch, prompt, "Some claim", urls)
+        timed_out = next(
+            s for s in result["sources"] if s["domain"] == "reuters.example"
+        )
+        self.assertEqual(timed_out["fetch_status"], "timeout")
+        self.assertEqual(timed_out["freshness"], "NotApplicable")
+        self.assertFalse(timed_out["is_stale"])
 
 
 if __name__ == "__main__":
