@@ -16,6 +16,8 @@ flowchart TD
     A -->|Attack 6| G[Weak / speculative evidence]
     A -->|Attack 7| H[Cross-domain content duplication]
     A -->|Attack 8| I[Spam submissions]
+    A -->|Attack 9| J[Stale/outdated content presented as current corroboration]
+    A -->|Attack 10| K[Resolving a claim against a hand-picked source list chosen after the fact]
 
     B -->|Mitigated| M1[_build_prompt guardrail: claim text is data, not instructions]
     C -->|Mitigated| M2[_build_prompt guardrail: source content is data, not instructions]
@@ -25,6 +27,8 @@ flowchart TD
     G -->|Mitigated| M6[Prompt guardrails: quoted/opinion/speculative -> Unclear]
     H -->|Out of scope| M7[No cross-domain text-similarity check]
     I -->|Out of scope| M8[No fee/staking mechanism]
+    J -->|Mitigated, v2.8| M9[LLM freshness judgment -> is_stale exclusion in _aggregate]
+    K -->|Mitigated, v2.8| M10[expected_domains locked at submit_claim time, before any fetch]
 ```
 
 ---
@@ -118,6 +122,8 @@ TruthBeacon assumes GenLayer's Optimistic Democracy provides Byzantine-fault-tol
 | No spam/cost-griefing defense | Would require a fee or staking mechanism — an architectural addition, not a bug fix |
 | No cryptographic source provenance | Would require signed publisher metadata infrastructure that doesn't exist yet on the open web |
 | Denylist is static and hand-maintained | A governance-controlled on-chain registry would be the production evolution |
+| `expected_domains` is caller-declared, not independently vetted (v2.8) | Verifying real-world domain trustworthiness is out of scope for deterministic on-chain code; see § 10 |
+| Freshness is an LLM judgment from page content only, no trusted clock (v2.8) | No on-chain source of "current date" is consulted; see § 11 |
 
 See [ROADMAP.md](ROADMAP.md) for how each of these could be addressed in a future version.
 
@@ -131,3 +137,27 @@ Summarized here; full detail in [ROADMAP.md](ROADMAP.md):
 - Cryptographic/signed publisher metadata for stronger provenance
 - Evidence weighting (not all agreeing sources are equally strong)
 - Spam resistance via staking or fees
+
+---
+
+## 10. Source-Authority Policy Gaming (v2.8)
+
+**Attack:** Submit a claim with a broad, unrestricted source list, then rely on whichever sources happen to look favorable at fetch time — i.e. treat "which domains count" as something decided implicitly by the URL list itself, rather than as an explicit, auditable policy.
+
+**Mitigation:** The new optional `expected_domains` parameter on `submit_claim` lets the claim creator declare, as part of the SAME transaction and BEFORE any source is fetched, which domains are authorized for that specific claim. `_annotate_sources` computes `is_authorized_domain` deterministically from this pre-declared set, and `_aggregate` excludes unauthorized domains from corroboration exactly like a duplicate or denylisted domain. Because the policy is fixed at claim-creation time and persisted (`expected_domains` in `get_claim`'s record), a reviewer can audit what the creator actually committed to, not just what sources happened to get submitted.
+
+**Evidence:** `test_expected_domains_restricts_corroboration_to_declared_set`, `test_expected_domains_with_no_matching_sources_is_rejected_upfront` in `tests/test_end_to_end.py`; `test_unauthorized_domain_not_counted_as_corroboration` in `tests/test_aggregation.py`.
+
+**Residual risk / known limitation:** `expected_domains` is caller-declared, not independently verified against any external reputation source — a claim creator could declare a low-quality domain as "expected." This is a deliberate scope boundary (see [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)): the mechanism's job is to make the *authority policy itself* auditable and tamper-resistant after the fact, not to independently vouch for the trustworthiness of whatever domains a creator chooses to declare — `LOW_CREDIBILITY_DOMAINS` (see § 3 above) remains the (separate, contract-controlled) mechanism for that.
+
+---
+
+## 11. Freshness Gaming / Stale-Content Corroboration (v2.8)
+
+**Attack:** Submit a source whose content is technically related to the claim's subject but describes an outdated state of affairs (e.g. an old article about a since-changed fact), hoping it counts as "independent corroboration" of a claim about the current state.
+
+**Mitigation:** The per-source LLM prompt (`_build_prompt`) now requests a second, independent judgment — `Current`/`Stale`/`Undated` — alongside the verdict. `_parse_freshness_label` parses this into a fixed vocabulary, defaulting conservatively to `Undated` (excluded) for any unparseable response, mirroring the existing `Unclear`-on-unparseable behavior for verdicts. `_aggregate` excludes any source flagged `is_stale` from corroboration, the same way it already excludes duplicates and denylisted domains.
+
+**Evidence:** `test_stale_source_excluded_from_corroboration_end_to_end`, `test_undated_source_excluded_from_corroboration_end_to_end` in `tests/test_end_to_end.py`; `test_stale_source_not_counted_as_corroboration`, `test_undated_source_excluded_same_as_stale` in `tests/test_aggregation.py`.
+
+**Residual risk:** Same category of risk as any other LLM-derived judgment in this contract (see § 2's residual-risk note on prompt injection) — freshness is a model *judgment*, not a cryptographically verified fact, so it inherits the same multi-validator-consensus defense-in-depth rather than a stronger guarantee. Unlike the verdict itself, there is no external ground truth to check freshness against beyond the fetched content itself, which is an inherent limitation of judging "recency" from page content alone (no trusted on-chain clock is consulted).

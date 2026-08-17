@@ -118,7 +118,7 @@ Added the complete professional documentation set: `ARCHITECTURE.md`, `SECURITY.
 
 ---
 
-## v2.7 — GenVM Lint Fix (E022) and Redeployment (Current)
+## v2.7 — GenVM Lint Fix (E022) and Redeployment
 
 **Reviewer feedback addressed:** "The submitted and deployed contract source matches, but the current source fails GenVM lint with E022 diagnostics on seven helper methods because they do not use self as the first parameter."
 
@@ -142,3 +142,33 @@ For each, the decorator was removed, the first parameter became `self`, and ever
 A live `submit_claim` transaction on this new deployment reached a `Verified` verdict from 2 independent corroborating sources (Wikipedia, History.com) on the Eiffel Tower claim, with a third source (Britannica) correctly recorded as `inaccessible` rather than silently ignored. Consensus was reached and finalized with no execution errors, confirming the E022 fix did not alter runtime behavior.
 
 The six transactions recorded against the prior (pre-fix) address in [REVIEWER_GUIDE.md § 4](REVIEWER_GUIDE.md#4-live-transaction-evidence) remain as historical evidence of the same underlying logic under the old address; they are labeled there as prior-deployment evidence, not evidence for the current address.
+
+---
+
+## v2.8 — Source-Authority Policy & Freshness Signal (Current)
+
+**Steward feedback addressed** (left on the Accepted v2.7 submission): "TruthBeacon is a substantive reusable fact-checking contract: it fetches multiple sources inside consensus, handles failed or malformed pages, binds the resulting verdict and evidence categories across validators, and stores an auditable record. A valuable next improvement would be a stronger source-authority and freshness policy so distinct domains provide more assurance of genuine independent corroboration."
+
+**Added:**
+- **Source-authority policy** — new optional `expected_domains: list[str]` parameter on `submit_claim`. Normalized and validated in deterministic pre-flight code (new `_normalize_domain_declaration` helper, delegating to `_extract_domain`), before any source is fetched. Gates corroboration eligibility via a new `is_authorized_domain` flag on every source record, computed by `_annotate_sources`. When omitted (default `[]`), every domain is authorized — identical to pre-v2.8 behavior. Persisted on-chain as part of the claim record for auditability.
+- **Freshness signal** — the per-source LLM prompt (`_build_prompt`) now requests a second, independent judgment line: `Current` / `Stale` / `Undated`, in addition to the existing verdict line. New `_parse_freshness_label` parses it (mirroring `_parse_source_verdict`'s all-lines scanning approach), defaulting safely to `Undated` for unparseable output. Gates corroboration eligibility via a new `is_stale` flag, exactly like `is_duplicate_domain`/`is_low_credibility` already do.
+- Two new top-level corroboration stats, persisted and returned by `get_claim`: `stale_source_count`, `unauthorized_domain_count`.
+- New per-source record fields: `is_authorized_domain`, `freshness`, `is_stale`.
+- `EQUIVALENCE_PRINCIPLE` extended to check the new `freshness` per-record field and the two new stat fields, following the existing pattern exactly.
+- 24 new offline tests across `test_domain_extraction.py` (new `TestNormalizeDomainDeclaration` class), `test_aggregation.py` (staleness/authorization gating, missing-key backward compatibility), `test_prompt_and_consensus.py` (freshness guardrail presence, updated schema-field check), and `test_end_to_end.py` (`expected_domains` enforcement, freshness gating, `NotApplicable` freshness on failed fetches, all exercised through the full `submit_claim` → `get_claim` pipeline).
+
+**Backward compatibility (verified, not just claimed):**
+- `_aggregate` reads both new flags via `.get(key, safe_default)` — `is_stale` defaults to `False`, `is_authorized_domain` defaults to `True` — so any record dict built before v2.8 (including every pre-existing test fixture) is unaffected. Covered by `test_missing_freshness_key_defaults_to_not_stale` and `test_missing_authorized_key_defaults_to_authorized`.
+- `submit_claim` without `expected_domains` behaves identically to pre-v2.8: `expected_domains` defaults to `[]`, and every domain is authorized. Covered by `test_omitting_expected_domains_is_fully_backward_compatible`.
+- All pre-existing mocked-LLM-response test fixtures in `test_end_to_end.py` and `test_storage.py` were updated to include an explicit `"Current"` freshness line, preserving every previously-asserted scenario and outcome exactly (the two-line prompt/response format is new; the scenarios and their expected verdicts are not).
+- GenVM lint rule E022 respected throughout: `_normalize_domain_declaration` and `_parse_freshness_label` are plain instance methods with `self` as the first parameter, like every other helper since v2.7 — no new `@classmethod`/`@staticmethod` was introduced.
+
+**Not changed:** `LOW_CREDIBILITY_DOMAINS` denylist logic, duplicate-domain detection, prompt-injection guardrails, `MIN_SOURCES_SUBMITTED`/`MAX_SOURCES_SUBMITTED`/`MIN_INDEPENDENT_DOMAINS` bounds, the aggregation decision table's support/oppose thresholds, and the public method signatures of `get_claim`, `get_verdict`, `total_claims` (all unchanged).
+
+Test count: 87 → 111.
+
+**Deployment status:** **deployed and exercised live.** Redeployed to a new address, `0x93F0F657a008FC99a41149E444AA37a604A14580` (source changes require redeployment; see [README.md § Live Deployment](README.md#live-deployment) for the full detail):
+- Tx `0x1891eb4645f426774c0301e3e9c7069d6fc253747381ed7672d7ef710afb5296` (FINALIZED) — a claim submitted with `expected_domains` restricting corroboration to 2 of 3 submitted domains; the third source was fetched, judged `Supported`, and correctly excluded from the count (`unauthorized_domain_count: 1`).
+- Tx `0x760cdaa2fefec430d5b2896643b546255d500c9028c9bad01d759e4826e98a54` (FINALIZED) — a claim submitted with a 2018 Wayback Machine snapshot as one of three sources; that source was correctly judged `freshness: "Stale"` and excluded from corroboration (`stale_source_count: 1`), independent of its verdict.
+
+Both transactions reached multi-validator consensus via `gl.eq_principle.prompt_comparative` (validator-level `Agree`/`Disagree` marks on individual raw outputs are expected `prompt_comparative` behavior, not errors — see README).

@@ -98,6 +98,16 @@ class TruthBeacon(gl.Contract):
     # ------------------------------------------------------------------
     SOURCE_VERDICTS = ("Supported", "NotSupported", "Unclear", "NoEvidence")
     FETCH_STATUSES = ("ok", "empty", "timeout", "inaccessible", "malformed")
+    # Freshness classification for a successfully-fetched source,
+    # relative to the claim it's being judged against (see
+    # _build_prompt / _parse_freshness_label). "NotApplicable" is the
+    # deterministic value used for every record whose fetch_status is
+    # not "ok" - there is no content to judge freshness on, so this
+    # is never LLM-derived, unlike the other three values. Keeping
+    # all four in ONE closed vocabulary mirrors FETCH_STATUSES, which
+    # already mixes a success value ("ok") with failure values in a
+    # single fixed tuple for the same comparator-friendliness reason.
+    FRESHNESS_LABELS = ("Current", "Stale", "Undated", "NotApplicable")
     FINAL_VERDICTS = (
         "Verified",          # enough independent, credible sources agree it's true
         "Refuted",           # enough independent, credible sources agree it's false
@@ -232,6 +242,10 @@ class TruthBeacon(gl.Contract):
     # ------------------------------------------------------------------
     MAX_CLAIM_TEXT_CHARS = 2000
     MAX_URL_CHARS = 2048
+    # Cap on how many entries `expected_domains` (see submit_claim)
+    # may contain - same DoS-bounding rationale as MAX_URL_CHARS,
+    # applied to this new, separate list.
+    MAX_EXPECTED_DOMAINS = 10
 
     # ------------------------------------------------------------------
     # Equivalence principle used for the non-deterministic pipeline.
@@ -250,13 +264,16 @@ class TruthBeacon(gl.Contract):
         "exact same value; (2) for every URL that appears in both "
         "results' 'records' list, the 'fetch_status' field has the "
         "exact same value AND the 'verdict' field has the exact same "
-        "value; AND (3) their 'independent_domain_count', "
-        "'duplicate_domain_count', and 'failed_source_count' fields "
-        "each have the exact same value. Differences in JSON key "
-        "ordering, whitespace, or formatting do NOT affect "
+        "value AND the 'freshness' field has the exact same value; "
+        "AND (3) their 'independent_domain_count', "
+        "'duplicate_domain_count', 'failed_source_count', "
+        "'stale_source_count', and 'unauthorized_domain_count' "
+        "fields each have the exact same value. Differences in JSON "
+        "key ordering, whitespace, or formatting do NOT affect "
         "equivalence. If 'final_verdict' differs, or if any record's "
-        "'fetch_status' or 'verdict' differs, or if any of the three "
-        "count fields differs, the two results are NOT equivalent."
+        "'fetch_status', 'verdict', or 'freshness' differs, or if "
+        "any of the five count fields differs, the two results are "
+        "NOT equivalent."
     )
 
     def __init__(self):
@@ -395,7 +412,37 @@ class TruthBeacon(gl.Contract):
 
         return last_two
 
-    def _annotate_sources(self, source_urls):
+    def _normalize_domain_declaration(self, raw: str) -> str:
+        """
+        Normalize a caller-declared entry from `expected_domains`
+        (see submit_claim) to the same approximate registrable-domain
+        form that _extract_domain computes for actual fetched source
+        URLs, so that "is this source's domain on the pre-declared
+        list" is a same-representation comparison on both sides.
+
+        Accepts either a bare domain ("reuters.com",
+        "www.reuters.com") or a full http(s) URL
+        ("https://reuters.com/article") - both normalize to the same
+        value ("reuters.com"). Reuses _extract_domain rather than
+        re-implementing its path/port/userinfo/IPv6 handling: a
+        scheme-less entry is simply given a temporary "https://"
+        prefix before delegating, so there is exactly one place
+        responsible for hostname-to-registrable-domain reduction.
+
+        Returns "" for empty, overlong, or otherwise unparseable
+        input - callers treat that as an invalid declaration (see
+        submit_claim, which rejects the whole call rather than
+        silently dropping a bad entry, unlike source_urls' invalid
+        entries which are recorded as "inaccessible" and kept).
+        """
+        d = raw.strip().lower()
+        if not d or len(d) > self.MAX_URL_CHARS:
+            return ""
+        if "://" in d:
+            return self._extract_domain(d)
+        return self._extract_domain("https://" + d)
+
+    def _annotate_sources(self, source_urls, expected_domain_set=frozenset()):
         """
         Deterministically annotate each candidate source with
         provenance metadata BEFORE any network access happens:
@@ -409,6 +456,16 @@ class TruthBeacon(gl.Contract):
                                    submission already used this domain
           - is_low_credibility:   true if the domain is on the
                                    illustrative denylist above
+          - is_authorized_domain: true if `expected_domain_set` is
+                                   empty (no source-authority policy
+                                   was declared for this claim - the
+                                   pre-v2.8 default, every domain is
+                                   authorized), OR if this source's
+                                   domain is a member of that
+                                   caller-declared, submission-time
+                                   -locked set (see submit_claim's
+                                   `expected_domains` parameter and
+                                   _normalize_domain_declaration).
 
         Because this only touches caller-supplied strings (no I/O),
         it is safe to run outside of a gl.eq_principle.* block - every
@@ -422,6 +479,9 @@ class TruthBeacon(gl.Contract):
             is_duplicate = valid_scheme and domain in seen_domains
             if valid_scheme and not is_duplicate:
                 seen_domains.add(domain)
+            is_authorized = (
+                True if not expected_domain_set else domain in expected_domain_set
+            )
             annotated.append(
                 {
                     "url": raw_url,
@@ -429,6 +489,7 @@ class TruthBeacon(gl.Contract):
                     "valid_scheme": valid_scheme,
                     "is_duplicate_domain": is_duplicate,
                     "is_low_credibility": domain in self.LOW_CREDIBILITY_DOMAINS,
+                    "is_authorized_domain": is_authorized,
                 }
             )
         return annotated
@@ -527,11 +588,26 @@ class TruthBeacon(gl.Contract):
 
         Only sources that are:
           - successfully fetched ("ok"),
-          - NOT a duplicate domain of an earlier source, and
-          - NOT on the low-credibility denylist
+          - NOT a duplicate domain of an earlier source,
+          - NOT on the low-credibility denylist,
+          - NOT flagged stale/undated (`is_stale`), and
+          - authorized under the claim's declared source-authority
+            policy, if any (`is_authorized_domain`)
         count toward corroboration. This is what turns "3 pages" into
-        "3 *independent, credible* sources" and is the direct fix for
-        the reviewer's core complaint.
+        "3 *independent, credible, current, pre-approved* sources"
+        and is the direct fix for the reviewer's core complaint plus
+        the v2.8 source-authority/freshness hardening (see
+        CHANGELOG.md).
+
+        `is_stale` and `is_authorized_domain` are read with `.get(...,
+        default)` rather than direct indexing, unlike the other three
+        flags: this keeps `_aggregate` callable with records built
+        before these two fields existed (e.g. hand-built test
+        fixtures that only set the original four keys) without
+        raising a KeyError, and a record silently missing either key
+        is treated exactly as it would have been pre-v2.8 - current
+        (not stale) and authorized - which is what preserves this
+        method's behavior for every pre-existing caller.
         """
         eligible = [
             r
@@ -539,6 +615,8 @@ class TruthBeacon(gl.Contract):
             if r["fetch_status"] == "ok"
             and not r["is_duplicate_domain"]
             and not r["is_low_credibility"]
+            and not r.get("is_stale", False)
+            and r.get("is_authorized_domain", True)
         ]
 
         support = sum(1 for r in eligible if r["verdict"] == "Supported")
@@ -598,6 +676,41 @@ class TruthBeacon(gl.Contract):
                     return option
         return "Unclear"
 
+    def _parse_freshness_label(self, raw: str) -> str:
+        """
+        Deterministically map a raw LLM response to one of the three
+        LLM-derived freshness labels (FRESHNESS_LABELS[:3] ==
+        "Current", "Stale", "Undated"), defaulting safely to
+        "Undated" - the conservative, non-eligible-for-corroboration
+        default (see _aggregate) - for anything that doesn't match.
+
+        Only ever called for sources that were successfully fetched
+        and judged (fetch_status == "ok"); the fourth vocabulary
+        value, "NotApplicable", is assigned directly by the
+        submit_claim nondet() closure for every other fetch_status,
+        never produced by this parser.
+
+        Mirrors _parse_source_verdict's approach exactly (whole-line,
+        case-insensitive, whitespace-collapsed match scanned across
+        every line of the response, not just one) and for the same
+        reasons: robust to a short preamble despite instructions, and
+        immune to a substring false-positive like "the date is
+        unclear, but the content itself reads as Stale" matching on
+        an unrelated word.
+
+        Purely deterministic (same input string always yields the
+        same output string) - safe to call from anywhere.
+        """
+        if not raw:
+            return "Undated"
+        for line in raw.splitlines():
+            candidate = line.strip().strip(".,!?\"'").strip()
+            candidate_compact = "".join(candidate.split()).lower()
+            for option in self.FRESHNESS_LABELS[:3]:
+                if candidate_compact == option.lower():
+                    return option
+        return "Undated"
+
     def _build_prompt(self, claim_text: str, source_content: str) -> str:
         """
         Build a hardened fact-checking prompt.
@@ -628,16 +741,25 @@ class TruthBeacon(gl.Contract):
              must resolve to Unclear, not a confident verdict.
           7. Insufficient evidence must resolve to Unclear rather than
              a guess.
-          8. A strict single-word output format, which is what makes
-             the fixed-vocabulary, comparator-friendly consensus
-             design practical at all (see EQUIVALENCE_PRINCIPLE).
+          8. A strict, fixed two-line output format (verdict, then a
+             separate freshness judgment - see below), which is what
+             makes the fixed-vocabulary, comparator-friendly
+             consensus design practical at all (see
+             EQUIVALENCE_PRINCIPLE).
+          9. A separate FRESHNESS judgment (Current / Stale /
+             Undated), asked for independently of the verdict, so
+             that a source can be judged (say) "Supported" while
+             still being flagged as describing an outdated state of
+             affairs - see _aggregate, where a "Stale"/"Undated"
+             freshness excludes a source from corroboration exactly
+             like a duplicate or low-credibility domain does.
 
         NOTE: these are prompt-level guardrails, not a guarantee of
         model behavior. See README "Known limitations" - this
         contract cannot force an LLM to comply, it can only instruct
-        it clearly and fall back to a safe default (Unclear) for any
-        response outside the fixed vocabulary (handled in
-        submit_claim, not here).
+        it clearly and fall back to a safe default (Unclear for the
+        verdict, Undated for freshness) for any response outside the
+        fixed vocabulary (handled in submit_claim, not here).
         """
         return f"""
         You are a neutral fact-checking assistant participating in a
@@ -698,13 +820,29 @@ class TruthBeacon(gl.Contract):
         Based ONLY on the factual content of the source above, decide
         whether the source supports the claim.
 
-        Respond with ONLY one single word, exactly one of:
-        Supported
-        NotSupported
-        Unclear
+        SEPARATELY, also judge the FRESHNESS of the source's content
+        relative to the claim - this is independent of whether the
+        source supports, refutes, or is unclear about the claim
+        itself:
 
-        Do not add punctuation, explanation, quotation marks, or any
-        other text.
+        - Respond "Current" if the source reads as up to date and
+          relevant to the claim's timeframe (e.g. it references
+          recent dates or ongoing/current events, or its content is
+          not time-sensitive and shows no signs of being outdated).
+        - Respond "Stale" if the source itself indicates, or its
+          content otherwise makes clear, that it describes an earlier
+          state of affairs that may since have changed, or content
+          that is explicitly old/outdated relative to the claim.
+        - Respond "Undated" if the source gives no usable signal
+          either way - no dates, no time-context clues, no way to
+          judge recency.
+
+        Respond with EXACTLY TWO LINES and nothing else:
+        Line 1 - your verdict, exactly one of: Supported / NotSupported / Unclear
+        Line 2 - your freshness judgment, exactly one of: Current / Stale / Undated
+
+        Do not add punctuation, explanation, quotation marks, headers,
+        or any other text beyond these two lines.
         """
 
     # ======================================================================
@@ -712,7 +850,12 @@ class TruthBeacon(gl.Contract):
     # ======================================================================
 
     @gl.public.write
-    def submit_claim(self, claim_text: str, source_urls: list[str]) -> str:
+    def submit_claim(
+        self,
+        claim_text: str,
+        source_urls: list[str],
+        expected_domains: list[str] = [],
+    ) -> str:
         """
         Submit a claim together with MULTIPLE candidate source URLs.
 
@@ -729,6 +872,25 @@ class TruthBeacon(gl.Contract):
         pages, and malformed content. The block returns full
         provenance + evidence for every source plus one deterministic
         final verdict, which is what gets persisted on-chain.
+
+        `expected_domains` (new, optional, default `[]` - never
+        mutated, safe as a default value): an OPTIONAL, caller-
+        declared source-authority policy, locked in as part of THIS
+        SAME transaction, before any source is fetched. When left
+        empty (the default), behavior is identical to pre-v2.8: every
+        submitted domain is treated as authorized. When non-empty,
+        each entry (a bare domain like "reuters.com", or a full
+        http(s) URL) is normalized to a registrable domain, and only
+        submitted sources whose domain is a member of that
+        pre-declared set are eligible to count toward corroboration
+        in `_aggregate` - every source is still fetched and recorded
+        for transparency either way. Because this policy is fixed
+        at claim-creation time rather than being inferable from
+        whichever URLs happen to get submitted, a claim's
+        corroboration basis can be audited against what the creator
+        actually committed to up front, not just against whatever
+        source list was chosen after the fact. See README /
+        DESIGN_DECISIONS.md for the full rationale.
         """
         claim_text = claim_text.strip()
         if not claim_text:
@@ -751,13 +913,37 @@ class TruthBeacon(gl.Contract):
                 f"URLs are accepted per claim (got {len(source_urls)})."
             )
 
+        # Normalize and validate the optional `expected_domains`
+        # source-authority policy BEFORE annotating sources, so that
+        # annotation can gate `is_authorized_domain` on the final,
+        # validated set in one pass. An empty `expected_domains`
+        # means "no policy declared" - identical to pre-v2.8
+        # behavior - so this whole block is a no-op in that case.
+        expected_domain_set = set()
+        if expected_domains:
+            if len(expected_domains) > self.MAX_EXPECTED_DOMAINS:
+                raise gl.vm.UserError(
+                    f"At most {self.MAX_EXPECTED_DOMAINS} expected_domains "
+                    f"entries are accepted per claim "
+                    f"(got {len(expected_domains)})."
+                )
+            for raw_domain in expected_domains:
+                normalized = self._normalize_domain_declaration(raw_domain)
+                if not normalized:
+                    raise gl.vm.UserError(
+                        f"Invalid entry in expected_domains: {raw_domain!r}. "
+                        f"Provide a bare domain (e.g. 'reuters.com') or a "
+                        f"full http(s) URL."
+                    )
+                expected_domain_set.add(normalized)
+
         # Deterministic pre-flight annotation (domains, duplicates,
-        # denylist flags) - no network access yet. Overly long URLs
-        # are handled uniformly here too: _extract_domain rejects them
-        # the same way it rejects a bad scheme (domain == "" ->
-        # valid_scheme == False -> classified "inaccessible" below,
-        # never fetched).
-        annotated = self._annotate_sources(source_urls)
+        # denylist, authorized-domain flags) - no network access yet.
+        # Overly long URLs are handled uniformly here too:
+        # _extract_domain rejects them the same way it rejects a bad
+        # scheme (domain == "" -> valid_scheme == False -> classified
+        # "inaccessible" below, never fetched).
+        annotated = self._annotate_sources(source_urls, expected_domain_set)
 
         # A submission must have enough distinct, CREDIBLE domains to
         # even have a chance of reaching a non-"InsufficientEvidence"
@@ -783,10 +969,38 @@ class TruthBeacon(gl.Contract):
                 f"independent corroboration."
             )
 
+        # Same fail-fast philosophy, applied to the declared
+        # source-authority policy: if `expected_domains` was
+        # provided, a submission where fewer than
+        # MIN_INDEPENDENT_DOMAINS of the actual source_urls resolve
+        # to an authorized, credible domain could mathematically
+        # never reach anything but "InsufficientEvidence" once
+        # _aggregate's is_authorized_domain gate is applied - reject
+        # it up front rather than spending fetch/LLM cost on it.
+        if expected_domain_set:
+            distinct_authorized_credible_domains = {
+                a["domain"]
+                for a in annotated
+                if a["valid_scheme"]
+                and not a["is_low_credibility"]
+                and a["is_authorized_domain"]
+            }
+            if len(distinct_authorized_credible_domains) < self.MIN_INDEPENDENT_DOMAINS:
+                raise gl.vm.UserError(
+                    f"expected_domains was provided, but at least "
+                    f"{self.MIN_INDEPENDENT_DOMAINS} of the submitted "
+                    f"source_urls must resolve to a domain on that "
+                    f"pre-declared list (found "
+                    f"{len(distinct_authorized_credible_domains)}). Either "
+                    f"submit source URLs matching the declared policy, or "
+                    f"broaden expected_domains."
+                )
+
         classify_content = self._classify_content
         build_prompt = self._build_prompt
         aggregate = self._aggregate
         parse_verdict = self._parse_source_verdict
+        parse_freshness = self._parse_freshness_label
 
         def nondet() -> str:
             """
@@ -811,12 +1025,15 @@ class TruthBeacon(gl.Contract):
                     "domain": src["domain"],
                     "is_duplicate_domain": src["is_duplicate_domain"],
                     "is_low_credibility": src["is_low_credibility"],
+                    "is_authorized_domain": src["is_authorized_domain"],
                 }
 
                 # --- Failure case: malformed / unusable URL scheme ---
                 if not src["valid_scheme"]:
                     record["fetch_status"] = "inaccessible"
                     record["verdict"] = "NoEvidence"
+                    record["freshness"] = "NotApplicable"
+                    record["is_stale"] = False
                     records.append(record)
                     continue
 
@@ -834,6 +1051,8 @@ class TruthBeacon(gl.Contract):
                     else:
                         record["fetch_status"] = "inaccessible"
                     record["verdict"] = "NoEvidence"
+                    record["freshness"] = "NotApplicable"
+                    record["is_stale"] = False
                     records.append(record)
                     continue
 
@@ -842,14 +1061,20 @@ class TruthBeacon(gl.Contract):
                 if not usable:
                     record["fetch_status"] = status  # "empty" or "malformed"
                     record["verdict"] = "NoEvidence"
+                    record["freshness"] = "NotApplicable"
+                    record["is_stale"] = False
                     records.append(record)
                     continue
 
-                # --- Healthy source: ask the LLM for a verdict ---
+                # --- Healthy source: ask the LLM for a verdict AND a
+                # freshness judgment (see _build_prompt / _aggregate)
+                # ---
                 record["fetch_status"] = "ok"
                 prompt = build_prompt(claim_text, content)
                 raw = gl.nondet.exec_prompt(prompt, response_format="text")
                 record["verdict"] = parse_verdict(raw)
+                record["freshness"] = parse_freshness(raw)
+                record["is_stale"] = record["freshness"] != "Current"
                 records.append(record)
 
             final_verdict = aggregate(records)
@@ -860,6 +1085,14 @@ class TruthBeacon(gl.Contract):
             # recomputed separately after the equivalence-principle
             # call returns. Each is a small bounded integer
             # (0..MAX_SOURCES_SUBMITTED), safe for the comparator.
+            # `independent_domain_count` now reflects the SAME full
+            # eligibility gate _aggregate uses (ok, non-duplicate,
+            # non-denylisted, non-stale, authorized) - when no
+            # expected_domains policy was declared and every source
+            # is judged "Current" (the default assumption whenever a
+            # response doesn't explicitly signal otherwise), this is
+            # numerically identical to the pre-v2.8 computation, so
+            # existing callers see no change.
             independent_domain_count = len(
                 {
                     r["domain"]
@@ -867,6 +1100,8 @@ class TruthBeacon(gl.Contract):
                     if r["fetch_status"] == "ok"
                     and not r["is_duplicate_domain"]
                     and not r["is_low_credibility"]
+                    and not r["is_stale"]
+                    and r["is_authorized_domain"]
                 }
             )
             duplicate_domain_count = sum(
@@ -874,6 +1109,16 @@ class TruthBeacon(gl.Contract):
             )
             failed_source_count = sum(
                 1 for r in records if r["fetch_status"] != "ok"
+            )
+            # Only meaningful for successfully-fetched sources - a
+            # failed fetch's freshness is "NotApplicable" /
+            # is_stale=False by construction above, so it never
+            # inflates this count.
+            stale_source_count = sum(
+                1 for r in records if r["fetch_status"] == "ok" and r["is_stale"]
+            )
+            unauthorized_domain_count = sum(
+                1 for r in records if not r["is_authorized_domain"]
             )
 
             return json.dumps(
@@ -883,6 +1128,8 @@ class TruthBeacon(gl.Contract):
                     "independent_domain_count": independent_domain_count,
                     "duplicate_domain_count": duplicate_domain_count,
                     "failed_source_count": failed_source_count,
+                    "stale_source_count": stale_source_count,
+                    "unauthorized_domain_count": unauthorized_domain_count,
                 },
                 sort_keys=True,
             )
@@ -897,10 +1144,16 @@ class TruthBeacon(gl.Contract):
         independent_domain_count = result["independent_domain_count"]
         duplicate_domain_count = result["duplicate_domain_count"]
         failed_source_count = result["failed_source_count"]
+        stale_source_count = result["stale_source_count"]
+        unauthorized_domain_count = result["unauthorized_domain_count"]
 
         claim_id = str(int(self.claim_count))
 
         # Persist the full auditable evidence trail + final verdict.
+        # `expected_domains` is persisted too (sorted, normalized) so
+        # the source-authority policy the claim was created under is
+        # itself part of the permanent, auditable record - not just
+        # its effect on which sources counted.
         self.claim_records[claim_id] = json.dumps(
             {
                 "claim_id": claim_id,
@@ -910,6 +1163,9 @@ class TruthBeacon(gl.Contract):
                 "independent_domain_count": independent_domain_count,
                 "duplicate_domain_count": duplicate_domain_count,
                 "failed_source_count": failed_source_count,
+                "stale_source_count": stale_source_count,
+                "unauthorized_domain_count": unauthorized_domain_count,
+                "expected_domains": sorted(expected_domain_set),
                 "sources": records,
             },
             sort_keys=True,

@@ -84,7 +84,7 @@ Every significant design choice in TruthBeacon v2, in the format: **Problem → 
 
 **Alternative considered:** Doing all of this inside the non-deterministic closure, so a single code path handles everything. Rejected because it would mean every validator spends real fetch/LLM cost on a submission that could have been rejected for free (e.g., all-denylisted-domain submissions, or fewer than 3 sources) — verified live: an invalid-input transaction with only 2 sources was rejected by all 5 validators with an identical message, before any web fetch happened (see [REVIEWER_GUIDE.md](REVIEWER_GUIDE.md)).
 
-**Trade-offs:** None significant — this is a strict improvement in both cost and clarity, since deterministic logic is also the easiest to unit-test exhaustively (69 of the 87 offline tests exercise pure deterministic functions with zero mocking required).
+**Trade-offs:** None significant — this is a strict improvement in both cost and clarity, since deterministic logic is also the easiest to unit-test exhaustively (the large majority of the 111 offline tests exercise pure deterministic functions with zero mocking required — see [tests/README.md](tests/README.md) for the file-by-file breakdown). The same reasoning is why v2.8's `expected_domains` validation (§ 10 below) is also deterministic pre-flight logic, not something deferred into `nondet()`.
 
 ---
 
@@ -109,3 +109,27 @@ Every significant design choice in TruthBeacon v2, in the format: **Problem → 
 **Alternative considered:** A live reputation API or oracle. Rejected for the same determinism reason as the PSL: an external, potentially-changing data source cannot be safely queried from inside consensus-critical code without risking validators seeing different data at different times.
 
 **Trade-offs:** The list is small, illustrative, and requires a contract upgrade to extend — acceptable for an educational reference implementation, explicitly flagged as a production gap. See [ROADMAP.md](ROADMAP.md) for the governance-registry alternative.
+
+---
+
+## 10. Why `expected_domains` Is an Optional Allowlist, Not a Trust-Tier Score (v2.8)
+
+**Problem:** The steward's review suggested a "stronger source-authority... policy so distinct domains provide more assurance of genuine independent corroboration" — but `submit_claim` is a single atomic transaction (fetch and judgment happen in the same call as submission), so there's no separate "resolution" step to protect against in the literal sense of a two-phase propose/resolve design. What's the right shape for a source-authority mechanism here?
+
+**Chosen solution:** An optional `expected_domains: list[str]` parameter, checked and normalized entirely in deterministic pre-flight code (alongside `_annotate_sources`, per § 7 above) before any fetch happens, and gating `_aggregate` eligibility via a new `is_authorized_domain` flag — architecturally identical in shape to the existing `LOW_CREDIBILITY_DOMAINS` gate, just caller-declared per-claim instead of contract-wide and hardcoded.
+
+**Alternative considered:** A numeric/tiered "trust score" per domain (e.g. `min_trust_tier: "any" | "standard" | "high"` mapped against a contract-maintained tiered domain database). Rejected for this iteration: it would require the contract to maintain and periodically extend an opinionated, hardcoded tier assignment for arbitrary domains — the same static-list-maintenance burden already disclosed as a known limitation for `LOW_CREDIBILITY_DOMAINS` (see [SECURITY.md § 8](SECURITY.md#8-known-limitations-not-fixed-by-design)), but now for an open-ended "which domains are high-trust" judgment that's considerably more subjective and contestable than "which domains are known bad actors." An explicit, per-claim, creator-declared allowlist sidesteps that subjectivity: the contract doesn't have to adjudicate whose domains are "trustworthy" in the abstract, only whether the *submitted* sources match what the *claim creator themselves* committed to up front.
+
+**Trade-offs:** `expected_domains` is caller-declared, not independently vetted (see [SECURITY.md § 10](SECURITY.md#10-source-authority-policy-gaming-v28) for the full residual-risk discussion) — a creator could declare a low-quality domain as "expected." What this mechanism guarantees is narrower but still valuable: the *policy itself* is locked in atomically with the claim, auditable on-chain (`expected_domains` in `get_claim`'s persisted record), and cannot be redefined or reinterpreted after the fact to make a weak set of sources look pre-approved. A tiered trust-score system remains a natural, larger follow-up — see [ROADMAP.md](ROADMAP.md).
+
+---
+
+## 11. Why Freshness Is a Second Line in the Same Prompt, Not a Second LLM Call (v2.8)
+
+**Problem:** Classifying whether a fetched source presents current/recent information, versus stale or undated content, requires the same kind of contextual judgment as the existing `Supported`/`NotSupported`/`Unclear` verdict — but it's a genuinely separate question (a source can be "Supported" and "Stale" at the same time). How should this second judgment be obtained without doubling the LLM cost of every `submit_claim` call, or destabilizing the existing fixed-vocabulary consensus design?
+
+**Chosen solution:** Extend the existing single `gl.nondet.exec_prompt` call per source to request exactly two lines back — verdict, then freshness — parsed independently by two separate deterministic parsers (`_parse_source_verdict`, unchanged; `_parse_freshness_label`, new). `_parse_source_verdict` already scans every line of the response looking for a vocabulary match rather than only the first line, so adding a second line to the response format required zero changes to the existing verdict-parsing logic — only an additive prompt instruction and a new parser for the new line.
+
+**Alternative considered:** A second, independent `gl.nondet.exec_prompt` call dedicated to freshness. Rejected: it would double the number of LLM calls (and therefore roughly double cost and latency) for every source, for a judgment that the model can make from the exact same page content it's already reading to produce the verdict — there's no information-locality reason to split it into a separate call.
+
+**Trade-offs:** The prompt is now instructing the model to produce a stricter two-line format instead of one word, which is a slightly larger ask of model compliance; this is mitigated the same way the rest of this contract mitigates off-vocabulary model output — both `_parse_source_verdict` and `_parse_freshness_label` default safely (`Unclear` / `Undated` respectively) for anything that doesn't parse, rather than raising or guessing. `_parse_freshness_label`'s unparseable-default is deliberately `Undated` (the conservative, excluded-from-corroboration option) rather than `Current`, consistent with this contract's general "when unsure, don't count it" philosophy (see § 6 above) — see `test_missing_freshness_key_defaults_to_not_stale` in `tests/test_aggregation.py` for why that default is *also* safe for records that never went through this prompt at all (backward compatibility, not the same code path).
