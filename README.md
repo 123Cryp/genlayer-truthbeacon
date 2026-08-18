@@ -200,7 +200,7 @@ python3 -m unittest discover -s tests -p "test_*.py" -v
 | `test_end_to_end.py` | 22 | Full pipeline, adversarial scenarios, `expected_domains` + freshness (v2.8) |
 | `test_storage.py` | 8 | On-chain persistence, multi-claim isolation |
 
-Plus an unexecuted `gltest` integration example (`tests/gltest_integration_example.py` — explicitly marked as not-yet-validated) and real live deployment evidence (not yet covering v2.8 — see the warning above). Full three-tier explanation: **[TESTING.md](TESTING.md)**.
+Plus an unexecuted `gltest` integration example (`tests/gltest_integration_example.py` — explicitly marked as not-yet-validated) and real live deployment evidence, now covering both the base pipeline and the v2.8 source-authority/freshness policy (see [Live Deployment](#live-deployment) above). Full three-tier explanation: **[TESTING.md](TESTING.md)**.
 
 ---
 
